@@ -335,6 +335,27 @@ export async function createLocation(libraryId: string, input: { name: string; t
   return data
 }
 
+export async function getBooksForShelves(libraryId: string): Promise<AppBook[]> {
+  const books = await getLibraryBooks(libraryId)
+  const { data, error } = await supabase.from('book_copies').select('id,shelf_position').eq('library_id', libraryId).eq('inventory_status', 'active')
+  if (error) return books
+  const positions = new Map((data ?? []).map((row) => [row.id, row.shelf_position == null ? null : Number(row.shelf_position)]))
+  return books.map((book) => ({ ...book, shelfPosition: positions.get(book.id) ?? null }))
+}
+
+export async function assignBookToFurniture(libraryId: string, copyId: string, locationId: string | null, shelfPosition: number) {
+  const { error } = await supabase.from('book_copies').update({ location_id: locationId, shelf_position: shelfPosition }).eq('library_id', libraryId).eq('id', copyId)
+  if (!error) return
+  const { error: fallbackError } = await supabase.from('book_copies').update({ location_id: locationId }).eq('library_id', libraryId).eq('id', copyId)
+  if (fallbackError) throw fallbackError
+}
+
+export async function saveFurnitureBookOrder(libraryId: string, orderedCopyIds: string[]) {
+  const results = await Promise.all(orderedCopyIds.map((id, index) => supabase.from('book_copies').update({ shelf_position: index }).eq('library_id', libraryId).eq('id', id)))
+  const failure = results.find((result) => result.error)?.error
+  if (failure) throw new Error('La ubicación se guardó, pero falta aplicar la actualización de orden visual incluida en supabase/shelf-position.sql.')
+}
+
 export type ExternalBook = {
   source?: 'google_books' | 'open_library' | 'manual'
   sourceId: string

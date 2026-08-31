@@ -34,3 +34,7 @@ La cámara requiere HTTPS; Netlify lo proporciona automáticamente. En Supabase,
 ## Datos privados
 
 Los avatares y tickets se guardan en buckets privados y se muestran mediante URLs firmadas temporales. Las políticas RLS del proyecto Supabase deben limitar todas las tablas y rutas de Storage al propietario o miembro de cada biblioteca.
+
+## Orden visual de los muebles
+
+Para conservar el orden exacto de las portadas dentro de cada mueble, ejecuta una vez `supabase/shelf-position.sql` desde el SQL Editor de Supabase. Es una actualización compatible con bibliotecas existentes.

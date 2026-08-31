@@ -24,6 +24,7 @@ export type AppBook = {
   needsReview: boolean
   primaryGenre?: string | null
   genres: string[]
+  shelfPosition?: number | null
 }
 
 export type LibraryLocation = {
