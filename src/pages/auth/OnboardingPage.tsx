@@ -1,8 +1,8 @@
-import { FormEvent, useState } from 'react'
+import { FormEvent, useEffect, useState } from 'react'
 import { ArrowRight, BookOpen, LibraryBig, ShieldCheck, Sparkles } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useLibrary } from '../../context/LibraryContext'
-import { createLibrary, ensureProfile } from '../../lib/libraryApi'
+import { createLibrary, ensureProfile, getMyLibraries } from '../../lib/libraryApi'
 
 export function OnboardingPage() {
   const { user } = useAuth()
@@ -12,6 +12,16 @@ export function OnboardingPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  useEffect(() => {
+    if (!user) return
+    let active = true
+    void getMyLibraries(user.id).then(async (existing) => {
+      if (!active || !existing.length) return
+      await refresh()
+    }).catch(() => undefined)
+    return () => { active = false }
+  }, [user, refresh])
+
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (!user) return
@@ -19,6 +29,13 @@ export function OnboardingPage() {
     setError(null)
     try {
       await ensureProfile(user.id, typeof user.user_metadata?.display_name === 'string' ? user.user_metadata.display_name : undefined)
+
+      const existing = await getMyLibraries(user.id)
+      if (existing.length) {
+        await refresh()
+        return
+      }
+
       await createLibrary(user.id, name)
       await refresh()
     } catch (err) {
@@ -37,7 +54,7 @@ export function OnboardingPage() {
       <form onSubmit={submit} className="onboarding-form">
         <label>Nombre de la colección<input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="Mi Biblioteca" autoFocus /></label>
         {error && <div className="form-message error">{error}</div>}
-        <button className="auth-submit" disabled={loading}><BookOpen size={18}/>{loading ? 'Creando…' : 'Crear biblioteca'}<ArrowRight size={17}/></button>
+        <button className="auth-submit" disabled={loading}><BookOpen size={18}/>{loading ? 'Comprobando…' : 'Crear biblioteca'}<ArrowRight size={17}/></button>
       </form>
       <div className="onboarding-benefits">
         <span><ShieldCheck size={17}/> Privada por defecto</span>
