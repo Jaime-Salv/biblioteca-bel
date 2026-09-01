@@ -4,6 +4,13 @@ import { supabase } from '../../lib/supabase'
 
 type Mode = 'login' | 'signup'
 
+const configuredAppUrl = (import.meta.env.VITE_APP_URL || '').trim().replace(/\/$/, '')
+
+function getEmailRedirectUrl() {
+  const origin = configuredAppUrl || window.location.origin
+  return `${origin}/`
+}
+
 export function AuthPage() {
   const [mode, setMode] = useState<Mode>('login')
   const [name, setName] = useState('')
@@ -31,12 +38,12 @@ export function AuthPage() {
           password,
           options: {
             data: { display_name: name.trim() },
-            emailRedirectTo: window.location.origin,
+            emailRedirectTo: getEmailRedirectUrl(),
           },
         })
         if (authError) throw authError
         if (!data.session) {
-          setMessage('Cuenta creada. Revisa tu correo para confirmar la dirección y después inicia sesión.')
+          setMessage('Cuenta creada. Revisa tu correo para confirmar la dirección. El enlace te devolverá directamente a la app.')
           setMode('login')
           setPassword('')
         }
