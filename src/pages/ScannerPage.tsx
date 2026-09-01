@@ -37,6 +37,7 @@ export function ScannerPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const scannerControls = useRef<IScannerControls | null>(null)
   const scanLocked = useRef(false)
+  const lastInventoryScan = useRef<{ isbn: string; at: number }>({ isbn: '', at: 0 })
   const [cameraActive, setCameraActive] = useState(false)
 
   useEffect(() => {
@@ -55,20 +56,37 @@ export function ScannerPage() {
 
   useEffect(() => () => scannerControls.current?.stop(), [])
 
+  useEffect(() => {
+    if (mode !== 'inventory') return
+    const timer = window.setTimeout(() => { void startCamera() }, 120)
+    return () => window.clearTimeout(timer)
+  }, [mode])
+
   async function startCamera() {
     resetMessages(); setResult(null); setScannedIsbn(''); scanLocked.current = false
     if (!navigator.mediaDevices?.getUserMedia) { setError('Este navegador no permite usar la cámara. Prueba Chrome, Edge o Safari mediante HTTPS.'); return }
+    if (!videoRef.current) { setError('La cámara todavía no está lista. Inténtalo de nuevo.'); return }
     try {
       setCameraActive(true)
       const { BrowserMultiFormatReader } = await import('@zxing/browser')
       const reader = new BrowserMultiFormatReader()
       scannerControls.current = await reader.decodeFromConstraints(
         { audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } },
-        videoRef.current!,
+        videoRef.current,
         (scanResult) => {
-          if (!scanResult || scanLocked.current) return
+          if (!scanResult) return
           const detected = scanResult.getText().replace(/[^0-9Xx]/g, '').toUpperCase()
           if (detected.length !== 10 && detected.length !== 13) return
+
+          if (mode === 'inventory') {
+            const now = Date.now()
+            if (lastInventoryScan.current.isbn === detected && now - lastInventoryScan.current.at < 1800) return
+            lastInventoryScan.current = { isbn: detected, at: now }
+            void processInventoryIsbn(detected)
+            return
+          }
+
+          if (scanLocked.current) return
           scanLocked.current = true
           stopCamera()
           setIsbn(detected)
@@ -90,6 +108,23 @@ export function ScannerPage() {
       try { await enrichCapturedBook(activeLibrary.id, captured.id, found) } catch { /* queda en revisión */ }
     }
     return { captured, found }
+  }
+
+  async function processInventoryIsbn(value: string) {
+    if (!activeLibrary) return
+    const pendingIsbn = value.replace(/[^0-9Xx]/g, '').toUpperCase()
+    if (pendingIsbn.length !== 10 && pendingIsbn.length !== 13) return
+    setIsbn('')
+    setError(null)
+    const temp: InventoryItem = { isbn: pendingIsbn, code: 'Guardando…', status: 'working' }
+    setInventory((old) => [temp, ...old])
+    try {
+      const { captured, found } = await captureAndIdentify(pendingIsbn, inventoryLocation || null)
+      setInventory((old) => old.map((x) => x === temp ? { isbn: captured.isbn, code: captured.internal_code, status: found ? 'identified' : 'review' } : x))
+    } catch (err) {
+      setInventory((old) => old.filter((x) => x !== temp))
+      setError(err instanceof Error ? err.message : 'No se pudo guardar este ISBN.')
+    }
   }
 
   async function identifyIsbn(value: string) {
@@ -177,17 +212,9 @@ export function ScannerPage() {
   }
 
   async function handleInventory(e: FormEvent) {
-    e.preventDefault(); if (!activeLibrary || !isbn.trim()) return
-    const pendingIsbn = isbn.trim(); setIsbn(''); resetMessages()
-    const temp: InventoryItem = { isbn: pendingIsbn, code: 'Guardando…', status: 'working' }
-    setInventory((old) => [temp, ...old])
-    try {
-      const { captured, found } = await captureAndIdentify(pendingIsbn, inventoryLocation || null)
-      setInventory((old) => old.map((x) => x === temp ? { isbn: captured.isbn, code: captured.internal_code, status: found ? 'identified' : 'review' } : x))
-    } catch (err) {
-      setInventory((old) => old.filter((x) => x !== temp))
-      setError(err instanceof Error ? err.message : 'No se pudo guardar este ISBN.')
-    }
+    e.preventDefault()
+    if (!isbn.trim()) return
+    await processInventoryIsbn(isbn)
   }
 
   return <div className="page add-book-page">
@@ -199,7 +226,7 @@ export function ScannerPage() {
         <button onClick={() => go('scan')}><span className="method-icon"><Camera/></span><span><strong>Escanear código</strong><small>Identifica, revisa y confirma</small></span><ChevronRight size={18}/></button>
         <button onClick={() => go('search')}><span className="method-icon"><Search/></span><span><strong>Buscar libro</strong><small>Título, autor o ISBN</small></span><ChevronRight size={18}/></button>
         <button onClick={() => go('manual')}><span className="method-icon"><PencilLine/></span><span><strong>Añadir manualmente</strong><small>Para libros antiguos, raros o sin ISBN</small></span><ChevronRight size={18}/></button>
-        <button className="inventory-method" onClick={() => go('inventory')}><span className="method-icon"><ListPlus/></span><span><strong>Inventario rápido</strong><small>Escanea muchos libros seguidos</small></span><ChevronRight size={18}/></button>
+        <button className="inventory-method" onClick={() => go('inventory')}><span className="method-icon"><ListPlus/></span><span><strong>Inventario rápido</strong><small>Cámara continua: libro tras libro</small></span><ChevronRight size={18}/></button>
       </section>
       <div className="product-rule"><Sparkles size={18}/><p><strong>Regla de la app:</strong> si posees físicamente el libro, siempre podrás registrarlo aunque ninguna base de datos externa lo conozca.</p></div>
     </>}
@@ -239,8 +266,14 @@ export function ScannerPage() {
 
     {mode === 'inventory' && <>
       <section className="inventory-setup"><label>¿Dónde estás inventariando?<select value={inventoryLocation} onChange={(e) => setInventoryLocation(e.target.value)}><option value="">Sin ubicación por ahora</option>{locations.map((loc) => <option value={loc.id} key={loc.id}>{loc.name}</option>)}</select></label><div className="inventory-count"><strong>{inventory.length}</strong><span>escaneados</span><small>{counts.identified} identificados · {counts.review} por revisar</small></div></section>
-      <form className="inventory-scan-form" onSubmit={handleInventory}><div className="inventory-scan-box"><Barcode size={27}/><input autoFocus value={isbn} onChange={(e) => setIsbn(e.target.value)} inputMode="numeric" placeholder="Escanea o escribe ISBN"/></div><button className="primary-button">Añadir y siguiente</button></form>
-      <p className="inventory-hint">Aquí sí se guarda automáticamente: es el modo pensado para inventariar muchos libros sin interrupciones.</p>
+      <section className={`camera-scanner inventory-camera ${cameraActive ? 'active' : ''}`}>
+        <video ref={videoRef} muted playsInline aria-label="Cámara continua para inventario rápido" />
+        {cameraActive && <div className="camera-guide"><span/><p>Apunta al código. Cuando lo lea, pasa directamente al siguiente libro.</p></div>}
+        {!cameraActive && <div className="camera-idle"><Camera size={36}/><strong>Cámara de inventario continuo</strong><p>Detecta, guarda y queda lista para el siguiente libro automáticamente.</p></div>}
+        <button type="button" className="primary-button camera-toggle" onClick={() => cameraActive ? stopCamera() : void startCamera()}>{cameraActive ? 'Pausar cámara' : 'Continuar escaneando'}</button>
+      </section>
+      <form className="inventory-scan-form" onSubmit={handleInventory}><div className="inventory-scan-box"><Barcode size={27}/><input value={isbn} onChange={(e) => setIsbn(e.target.value)} inputMode="numeric" placeholder="O escribe un ISBN manualmente"/></div><button className="primary-button">Añadir y siguiente</button></form>
+      <p className="inventory-hint">📷 La cámara permanece abierta: detectar → guardar → siguiente. Un mismo código tiene un pequeño bloqueo de 1,8 s para evitar duplicados accidentales mientras sigue dentro del encuadre.</p>
       <div className="inventory-list">{inventory.map((item, i) => <div key={`${item.code}-${i}`}><span>{item.status === 'identified' ? '✅' : item.status === 'review' ? '🟡' : '⏳'}</span><div><strong>{item.isbn}</strong><small>{item.code}</small></div><em>{item.status === 'identified' ? 'Identificado' : item.status === 'review' ? 'Revisar' : 'Procesando'}</em></div>)}</div>
     </>}
 
