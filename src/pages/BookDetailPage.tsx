@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Check, ExternalLink, Save, Sparkles, Upload } from 'lucide-react'
+import { ArrowLeft, Camera, Check, ExternalLink, Save, Sparkles, Upload } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { useLibrary } from '../context/LibraryContext'
 import {
@@ -16,6 +16,7 @@ import {
   type BookCollectorDetails,
   type CollectorAttributeState,
 } from '../lib/libraryApi'
+import { getCustomCoverUrl, uploadBookCoverPhoto } from '../lib/coverPhotoApi'
 import type { AppBook, LibraryLocation, ReadingStatus } from '../lib/models'
 
 const readingOptions: { value: ReadingStatus; label: string }[] = [
@@ -40,8 +41,9 @@ export function BookDetailPage(){
   const[loading,setLoading]=useState(true); const[saving,setSaving]=useState(false); const[error,setError]=useState<string|null>(null); const[saved,setSaved]=useState(false)
   const[form,setForm]=useState<EditState|null>(null); const[purchase,setPurchase]=useState<PurchaseState>({price:'',seller:'',date:'',orderNumber:''}); const[attributes,setAttributes]=useState<CollectorAttributeState[]>([])
   const[ticket,setTicket]=useState<File|null>(null); const[valuation,setValuation]=useState(''); const[valuationNote,setValuationNote]=useState(''); const[estimating,setEstimating]=useState(false); const[estimateMessage,setEstimateMessage]=useState<string|null>(null)
+  const[customCoverUrl,setCustomCoverUrl]=useState<string|null>(null); const[coverUploading,setCoverUploading]=useState(false); const[coverMessage,setCoverMessage]=useState<string|null>(null)
 
-  async function load(){ if(!activeLibrary||!id)return; setLoading(true); try{ const[books,locs,details]=await Promise.all([getLibraryBooks(activeLibrary.id),getLocations(activeLibrary.id),getBookCollectorDetails(activeLibrary.id,id)]); const found=books.find(b=>b.id===id)??null; setBook(found); setLocations(locs); setCollector(details); setPurchase(purchaseState(details)); setAttributes(details.attributes); if(found)setForm(stateFromBook(found)) }catch(err){setError(err instanceof Error?err.message:'No se pudo cargar la ficha.')}finally{setLoading(false)} }
+  async function load(){ if(!activeLibrary||!id)return; setLoading(true); try{ const[books,locs,details,customCover]=await Promise.all([getLibraryBooks(activeLibrary.id),getLocations(activeLibrary.id),getBookCollectorDetails(activeLibrary.id,id),getCustomCoverUrl(id).catch(()=>null)]); const found=books.find(b=>b.id===id)??null; setBook(found); setLocations(locs); setCollector(details); setPurchase(purchaseState(details)); setAttributes(details.attributes); setCustomCoverUrl(customCover); if(found)setForm(stateFromBook(found)) }catch(err){setError(err instanceof Error?err.message:'No se pudo cargar la ficha.')}finally{setLoading(false)} }
   useEffect(()=>{void load()},[activeLibrary,id])
   const locationOptions=useMemo(()=>locations.map(l=>({id:l.id,label:l.name})),[locations])
   const isDirty=useMemo(()=>{ if(!book||!form)return false; const base=JSON.stringify(stateFromBook(book)); const pBase=JSON.stringify(purchaseState(collector)); const aBase=JSON.stringify(collector?.attributes??[]); return JSON.stringify(form)!==base||JSON.stringify(purchase)!==pBase||JSON.stringify(attributes)!==aBase||!!ticket },[book,form,purchase,attributes,collector,ticket])
@@ -66,6 +68,7 @@ export function BookDetailPage(){
     await load(); setTicket(null); setSaved(true); window.setTimeout(()=>setSaved(false),2500)
   }catch(err){setError(err instanceof Error?err.message:'No se pudo guardar la ficha.')}finally{setSaving(false)} }
 
+  async function handleCoverPhoto(file:File|null){ if(!file||!activeLibrary||!book)return; setCoverUploading(true);setCoverMessage(null);setError(null); try{const url=await uploadBookCoverPhoto(activeLibrary.id,book.id,file);setCustomCoverUrl(url);setCoverMessage('📸 Foto guardada como portada de este ejemplar.');window.setTimeout(()=>setCoverMessage(null),3000)}catch(err){setError(err instanceof Error?err.message:'No se pudo guardar la foto de portada.')}finally{setCoverUploading(false)} }
   async function addManualValuation(){ if(!activeLibrary||!book||!valuation.trim())return; setError(null); try{await addBookValuation(activeLibrary.id,book.id,Number(valuation.replace(',','.')),'Valoración manual',valuationNote);setValuation('');setValuationNote('');await load()}catch(err){setError(err instanceof Error?err.message:'No se pudo guardar la valoración.')} }
   async function estimateValue(){ if(!activeLibrary||!book||!form?.isbn)return; setEstimating(true);setEstimateMessage(null);setError(null); try{const result=await estimateBookValueByIsbn(form.isbn); if(result.found&&result.value!=null){await addBookValuation(activeLibrary.id,book.id,result.value,result.source??'Fuente externa',result.note??null);setEstimateMessage(`✨ Referencia encontrada: ${result.value.toFixed(2)} ${result.currency??'€'}.`);await load()}else setEstimateMessage('No hay un precio público fiable para esta edición. Puedes añadir una valoración manual.') }catch(err){setError(err instanceof Error?err.message:'No se pudo estimar el valor.')}finally{setEstimating(false)} }
 
@@ -73,11 +76,12 @@ export function BookDetailPage(){
   if(!book||!form)return <div className="page"><Link to="/library" className="back-link"><ArrowLeft size={17}/> Biblioteca</Link><div className="empty-library"><div>📕</div><h2>No encontramos este ejemplar</h2></div></div>
 
   const latestValue=collector?.valuations[0]?.value ?? book.estimatedValue ?? null
+  const displayedCover=customCoverUrl||form.coverUrl
   return <form className="page lively-book-page" onSubmit={save}>
     <div className="detail-topbar lively-topbar"><Link to="/library" className="back-link"><ArrowLeft size={17}/> Biblioteca</Link><div className="live-edit-note">✏️ Editable directamente</div></div>
     {saved&&<div className="form-message success floating-success"><Check size={15}/> Cambios guardados</div>}{error&&<div className="form-message error">{error}</div>}
 
-    <section className="collector-hero"><div className="collector-cover-wrap"><div className="collector-cover">{form.coverUrl?<img src={form.coverUrl} alt={`Portada de ${form.title||'libro'}`}/>:<div className="cover-fallback"><span>📚</span><strong>{form.title||'Sin portada'}</strong></div>}</div><label className="cover-url-field">🖼️ Portada<input value={form.coverUrl} onChange={e=>setForm({...form,coverUrl:e.target.value})} placeholder="Pega una URL de portada"/></label></div>
+    <section className="collector-hero"><div className="collector-cover-wrap"><div className="collector-cover">{displayedCover?<img src={displayedCover} alt={`Portada de ${form.title||'libro'}`}/>:<div className="cover-fallback"><span>📚</span><strong>{form.title||'Sin portada'}</strong></div>}</div><label className="ticket-upload cover-camera-action"><Camera size={17}/><span>{coverUploading?'Guardando foto…':'Hacer foto de portada'}</span><input type="file" accept="image/*" capture="environment" disabled={coverUploading} onChange={e=>{void handleCoverPhoto(e.target.files?.[0]??null);e.currentTarget.value=''}}/></label>{coverMessage&&<small className="valuation-note">{coverMessage}</small>}{customCoverUrl&&<small className="muted-mini">Tu foto propia tiene prioridad sobre la portada externa.</small>}<label className="cover-url-field">🖼️ Portada externa<input value={form.coverUrl} onChange={e=>setForm({...form,coverUrl:e.target.value})} placeholder="Pega una URL de portada"/></label></div>
       <div className="collector-main-info"><p className="eyebrow">📘 {book.internalCode}</p><input className="title-live-input" value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/><input className="subtitle-live-input" value={form.subtitle} onChange={e=>setForm({...form,subtitle:e.target.value})} placeholder="Añadir subtítulo…"/><label className="author-live-field">✍️<input value={form.authors} onChange={e=>setForm({...form,authors:e.target.value})} placeholder="Autor o autores"/></label>
       <div className="collector-chips"><label className="chip-select reading-chip"><span>📖</span><select value={form.status} onChange={e=>setForm({...form,status:e.target.value as ReadingStatus})}>{readingOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></label><label className="chip-select condition-chip"><span>🌟</span><select value={form.condition} onChange={e=>setForm({...form,condition:e.target.value})}>{conditionOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></label>{book.needsReview&&<span className="review-pill">🟡 Ficha por completar</span>}</div></div></section>
 
