@@ -109,7 +109,10 @@ function buildZip(files: BackupFile[]) {
 }
 
 async function rows(table: string, libraryId: string) {
-  const { data, error } = await supabase.from(table).select('*').eq('library_id', libraryId)
+  const query = supabase.from(table).select('*')
+  const { data, error } = table === 'libraries'
+    ? await query.eq('id', libraryId)
+    : await query.eq('library_id', libraryId)
   if (error) throw error
   return data ?? []
 }
@@ -210,7 +213,7 @@ export async function createCompleteLibraryBackup(library: UserLibrary): Promise
     '- datos/biblioteca-completa.json: copia estructurada de todas las tablas de la colección.',
     '- datos/coleccion.csv: inventario legible por Excel, LibreOffice y otras hojas de cálculo.',
     '- archivos/documentos/: tickets, facturas y documentos privados.',
-    '- archivos/fotos/: fotografías propias asociadas a ejemplares.',
+    '- archivos/fotos/: fotografías propias asociadas a ejemplares, incluidas las portadas hechas con la cámara.',
     missing.length ? '- datos/archivos-no-incluidos.json: archivos que no pudieron descargarse y su ruta original.' : '',
     '',
     'Esta copia está diseñada para conservar los datos fuera de Supabase. Guarda el ZIP en un lugar seguro.',
