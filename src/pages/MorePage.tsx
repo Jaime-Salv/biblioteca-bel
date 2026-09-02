@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLibrary } from '../context/LibraryContext'
 import { ProfileAvatar } from '../components/ProfileAvatar'
+import { createCompleteLibraryBackup } from '../lib/backupApi'
 import { getLibraryBooks, updateLibrarySettings } from '../lib/libraryApi'
 
 type Panel = 'members' | 'settings' | null
@@ -54,10 +55,11 @@ export function MorePage() {
     if (!activeLibrary) return
     setBusy('backup'); setMessage(null)
     try {
-      const books = await getLibraryBooks(activeLibrary.id)
-      downloadFile(`${activeLibrary.name.replace(/[^a-z0-9]+/gi,'-').toLowerCase()}-copia.json`, JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), library: activeLibrary, books }, null, 2), 'application/json')
-      setMessage(`Copia de datos creada con ${books.length} libros. Los archivos privados permanecen protegidos en Supabase.`)
-    } catch (err) { setMessage(err instanceof Error ? err.message : 'No se pudo crear la copia.') }
+      const result = await createCompleteLibraryBackup(activeLibrary)
+      setMessage(result.missingDocuments
+        ? `Copia ZIP creada con ${result.books} libros y ${result.documents} archivos. ${result.missingDocuments} archivo(s) no pudieron incluirse y quedan identificados dentro del ZIP.`
+        : `Copia ZIP completa creada: ${result.books} libros y ${result.documents} archivos privados incluidos.`)
+    } catch (err) { setMessage(err instanceof Error ? err.message : 'No se pudo crear la copia completa.') }
     finally { setBusy(null) }
   }
 
@@ -77,7 +79,7 @@ export function MorePage() {
     <div className="settings-list">
       <button onClick={()=>setPanel(panel==='members'?null:'members')}><Users size={20}/><span>Cuenta y acceso</span><span>›</span></button>
       <button onClick={()=>void exportCsv()} disabled={!!busy}><FileSpreadsheet size={20}/><span>{busy==='csv'?'Preparando CSV…':'Exportar colección a CSV'}</span><Download size={16}/></button>
-      <button onClick={()=>void backup()} disabled={!!busy}><DatabaseBackup size={20}/><span>{busy==='backup'?'Creando copia…':'Copia de seguridad de datos'}</span><Download size={16}/></button>
+      <button onClick={()=>void backup()} disabled={!!busy}><DatabaseBackup size={20}/><span>{busy==='backup'?'Reuniendo datos y archivos…':'Copia de seguridad completa (.zip)'}</span><Download size={16}/></button>
       <button onClick={()=>setPanel(panel==='settings'?null:'settings')}><Settings size={20}/><span>Configuración</span><span>›</span></button>
     </div>
     {panel==='members'&&<div className="inline-panel settings-panel"><strong>Cuenta con acceso</strong><p>{user?.email}</p><small>Eres propietario de esta colección. La colaboración con invitaciones requiere activar el flujo de correo transaccional antes de abrirlo a terceros.</small></div>}
