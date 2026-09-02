@@ -13,6 +13,7 @@ import {
   searchExternalBooks,
   type ExternalBook,
 } from '../lib/libraryApi'
+import { getIsbnOwnership, type IsbnOwnership } from '../lib/duplicateApi'
 import type { LibraryLocation } from '../lib/models'
 
 type Mode = 'home' | 'scan' | 'search' | 'manual' | 'inventory'
@@ -24,6 +25,7 @@ export function ScannerPage() {
   const [isbn, setIsbn] = useState('')
   const [scannedIsbn, setScannedIsbn] = useState('')
   const [result, setResult] = useState<ExternalBook | null>(null)
+  const [ownership, setOwnership] = useState<IsbnOwnership | null>(null)
   const [addedCopyId, setAddedCopyId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
@@ -52,7 +54,15 @@ export function ScannerPage() {
 
   function resetMessages() { setError(null); setMessage(null); setAddedCopyId(null) }
   function stopCamera() { scannerControls.current?.stop(); scannerControls.current = null; setCameraActive(false); scanLocked.current = false }
-  function go(next: Mode) { stopCamera(); resetMessages(); setResult(null); setScannedIsbn(''); setMode(next) }
+  function go(next: Mode) { stopCamera(); resetMessages(); setResult(null); setScannedIsbn(''); setOwnership(null); setMode(next) }
+
+  async function confirmDuplicate(isbnValue: string, known?: IsbnOwnership | null) {
+    if (!activeLibrary) return false
+    const info = known ?? await getIsbnOwnership(activeLibrary.id, isbnValue)
+    if (!info.count) return true
+    const label = info.title ? `“${info.title}”` : `ISBN ${info.isbn}`
+    return window.confirm(`Ya tienes ${info.count} ${info.count === 1 ? 'ejemplar' : 'ejemplares'} de ${label}.\n\n¿Quieres añadir otro ejemplar igualmente?`)
+  }
 
   useEffect(() => () => scannerControls.current?.stop(), [])
 
@@ -63,7 +73,7 @@ export function ScannerPage() {
   }, [mode])
 
   async function startCamera() {
-    resetMessages(); setResult(null); setScannedIsbn(''); scanLocked.current = false
+    resetMessages(); setResult(null); setScannedIsbn(''); setOwnership(null); scanLocked.current = false
     if (!navigator.mediaDevices?.getUserMedia) { setError('Este navegador no permite usar la cámara. Prueba Chrome, Edge o Safari mediante HTTPS.'); return }
     if (!videoRef.current) { setError('La cámara todavía no está lista. Inténtalo de nuevo.'); return }
     try {
@@ -116,6 +126,15 @@ export function ScannerPage() {
     if (pendingIsbn.length !== 10 && pendingIsbn.length !== 13) return
     setIsbn('')
     setError(null)
+    try {
+      const existing = await getIsbnOwnership(activeLibrary.id, pendingIsbn)
+      if (existing.count && !(await confirmDuplicate(pendingIsbn, existing))) {
+        setMessage(`ISBN ${pendingIsbn} omitido: ya estaba en tu biblioteca.`)
+        return
+      }
+    } catch {
+      // Si falla la comprobación, no bloqueamos el inventario.
+    }
     const temp: InventoryItem = { isbn: pendingIsbn, code: 'Guardando…', status: 'working' }
     setInventory((old) => [temp, ...old])
     try {
@@ -128,17 +147,26 @@ export function ScannerPage() {
   }
 
   async function identifyIsbn(value: string) {
-    resetMessages(); setResult(null); setScannedIsbn(''); setLoading(true)
+    resetMessages(); setResult(null); setScannedIsbn(''); setOwnership(null); setLoading(true)
     const clean = value.replace(/[^0-9Xx]/g, '').toUpperCase()
     if (clean.length !== 10 && clean.length !== 13) {
       setError('Introduce un ISBN-10 o ISBN-13 válido.'); setLoading(false); return
     }
     try {
-      const found = await lookupGoogleBooksByIsbn(clean)
+      const [found, existing] = await Promise.all([
+        lookupGoogleBooksByIsbn(clean),
+        activeLibrary ? getIsbnOwnership(activeLibrary.id, clean).catch(() => null) : Promise.resolve(null),
+      ])
       setScannedIsbn(clean)
       setResult(found)
-      if (found) setMessage('✅ Libro identificado. Revisa los datos y confirma para añadirlo a tu biblioteca.')
-      else setMessage('ISBN detectado. No hemos completado sus metadatos, pero puedes guardarlo y editarlo después.')
+      setOwnership(existing)
+      if (existing?.count) {
+        setMessage(`⚠️ Ya tienes ${existing.count} ${existing.count === 1 ? 'ejemplar' : 'ejemplares'} de esta edición. Puedes añadir otro si realmente tienes otra copia física.`)
+      } else if (found) {
+        setMessage('✅ Libro identificado. Revisa los datos y confirma para añadirlo a tu biblioteca.')
+      } else {
+        setMessage('ISBN detectado. No hemos completado sus metadatos, pero puedes guardarlo y editarlo después.')
+      }
     } catch (err) {
       setScannedIsbn(clean)
       setResult(null)
@@ -153,6 +181,7 @@ export function ScannerPage() {
     if (!activeLibrary || !scannedIsbn) return
     resetMessages(); setLoading(true)
     try {
+      if (ownership?.count && !(await confirmDuplicate(scannedIsbn, ownership))) return
       if (result) {
         const book: ExternalBook = {
           ...result,
@@ -185,6 +214,8 @@ export function ScannerPage() {
     if (!activeLibrary) return
     resetMessages(); setLoading(true)
     try {
+      const candidateIsbn = book.isbn13 || book.isbn10
+      if (candidateIsbn && !(await confirmDuplicate(candidateIsbn))) return
       const copy = await addExternalBookToLibrary(activeLibrary.id, book)
       setAddedCopyId(copy.id)
       setMessage(`✅ ${book.title} añadido · ${copy.internal_code}`)
@@ -196,6 +227,7 @@ export function ScannerPage() {
     e.preventDefault(); if (!activeLibrary) return
     resetMessages(); setLoading(true)
     try {
+      if (manual.isbn.trim() && !(await confirmDuplicate(manual.isbn))) return
       const copy = await addManualBookToLibrary(activeLibrary.id, {
         title: manual.title,
         author: manual.author,
@@ -242,7 +274,8 @@ export function ScannerPage() {
       <form className="isbn-form" onSubmit={handleIsbn}><label><Keyboard size={18}/><input autoFocus value={isbn} onChange={(e) => setIsbn(e.target.value)} inputMode="numeric" placeholder="ISBN-10 o ISBN-13"/></label><button className="primary-button" disabled={loading}>{loading ? 'Buscando…' : 'Identificar libro'}</button></form>
       {scannedIsbn && <section className="scan-confirm-card">
         {result ? <div className="lookup-result"><div className="lookup-cover">{result.coverUrl ? <img src={result.coverUrl} alt=""/> : <div>📕</div>}</div><div><span className="eyebrow">IDENTIFICADO AUTOMÁTICAMENTE</span><h2>{result.title}</h2><p>{result.authors.join(', ') || 'Autor desconocido'}</p><small>{result.publisher ?? 'Editorial no disponible'}{result.publicationYear ? ` · ${result.publicationYear}` : ''}</small>{result.description && <p className="lookup-description">{result.description}</p>}</div></div> : <div className="unidentified-book"><strong>ISBN {scannedIsbn}</strong><p>No tenemos todavía los metadatos de esta edición. Puedes guardarla y completarla desde la ficha.</p></div>}
-        <button className="primary-button add-library-button" onClick={addScannedBook} disabled={loading || !!addedCopyId}>{addedCopyId ? 'Añadido a mi biblioteca ✓' : loading ? 'Añadiendo…' : 'Añadir a mi biblioteca'}</button>
+        {ownership?.count ? <div className="form-message error">Ya tienes {ownership.count} {ownership.count === 1 ? 'ejemplar' : 'ejemplares'} de esta edición. Añade otro solo si posees otra copia física.</div> : null}
+        <button className="primary-button add-library-button" onClick={addScannedBook} disabled={loading || !!addedCopyId}>{addedCopyId ? 'Añadido a mi biblioteca ✓' : loading ? 'Añadiendo…' : ownership?.count ? 'Añadir otro ejemplar' : 'Añadir a mi biblioteca'}</button>
         {addedCopyId && <Link className="soft-action view-added-book" to={`/books/${addedCopyId}`}>Ver y editar ficha</Link>}
       </section>}
     </>}
@@ -273,7 +306,7 @@ export function ScannerPage() {
         <button type="button" className="primary-button camera-toggle" onClick={() => cameraActive ? stopCamera() : void startCamera()}>{cameraActive ? 'Pausar cámara' : 'Continuar escaneando'}</button>
       </section>
       <form className="inventory-scan-form" onSubmit={handleInventory}><div className="inventory-scan-box"><Barcode size={27}/><input value={isbn} onChange={(e) => setIsbn(e.target.value)} inputMode="numeric" placeholder="O escribe un ISBN manualmente"/></div><button className="primary-button">Añadir y siguiente</button></form>
-      <p className="inventory-hint">📷 La cámara permanece abierta: detectar → guardar → siguiente. Un mismo código tiene un pequeño bloqueo de 1,8 s para evitar duplicados accidentales mientras sigue dentro del encuadre.</p>
+      <p className="inventory-hint">📷 La cámara permanece abierta: detectar → comprobar duplicados → guardar → siguiente. Un mismo código tiene un pequeño bloqueo de 1,8 s mientras sigue dentro del encuadre.</p>
       <div className="inventory-list">{inventory.map((item, i) => <div key={`${item.code}-${i}`}><span>{item.status === 'identified' ? '✅' : item.status === 'review' ? '🟡' : '⏳'}</span><div><strong>{item.isbn}</strong><small>{item.code}</small></div><em>{item.status === 'identified' ? 'Identificado' : item.status === 'review' ? 'Revisar' : 'Procesando'}</em></div>)}</div>
     </>}
 
