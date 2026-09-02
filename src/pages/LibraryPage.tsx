@@ -6,6 +6,7 @@ import { ProfileAvatar } from '../components/ProfileAvatar'
 import { BookCard } from '../components/BookCard'
 import { useLibrary } from '../context/LibraryContext'
 import { getLibraryBooks } from '../lib/libraryApi'
+import { getCustomCoverUrls } from '../lib/coverPhotoApi'
 import type { AppBook } from '../lib/models'
 
 const filters = [
@@ -14,7 +15,7 @@ const filters = [
 
 export function LibraryPage(){
  const {activeLibrary}=useLibrary(); const {user}=useAuth(); const [books,setBooks]=useState<AppBook[]>([]); const [loading,setLoading]=useState(true); const [error,setError]=useState<string|null>(null); const [query,setQuery]=useState(''); const [filter,setFilter]=useState('all'); const [surprise,setSurprise]=useState<AppBook|null>(null); const [advanced,setAdvanced]=useState(false)
- useEffect(()=>{let active=true;setLoading(true);getLibraryBooks(activeLibrary!.id).then(d=>{if(active)setBooks(d)}).catch(e=>{if(active)setError(e.message)}).finally(()=>{if(active)setLoading(false)});return()=>{active=false}},[activeLibrary])
+ useEffect(()=>{let active=true;setLoading(true);setError(null);getLibraryBooks(activeLibrary!.id).then(async d=>{try{const custom=await getCustomCoverUrls(d.map(b=>b.id));return d.map(book=>custom.has(book.id)?{...book,coverUrl:custom.get(book.id)}:book)}catch{return d}}).then(d=>{if(active)setBooks(d)}).catch(e=>{if(active)setError(e.message)}).finally(()=>{if(active)setLoading(false)});return()=>{active=false}},[activeLibrary])
  const visible=useMemo(()=>books.filter(b=>{const text=`${b.title} ${b.author} ${b.isbn??''} ${b.publisher??''} ${b.location??''} ${b.badges.join(' ')}`.toLowerCase(); const q=text.includes(query.toLowerCase()); const f=filter==='all'||filter==='special'&&b.badges.length>0||b.status===filter; return q&&f}),[books,query,filter])
  const read=books.filter(b=>b.status==='read').length; const value=books.reduce((a,b)=>a+(b.estimatedValue??0),0); const reading=books.filter(b=>b.status==='reading'); const recent=books.slice(0,3); const forgotten=books.filter(b=>b.status==='pending').sort((a,b)=>a.addedAt.localeCompare(b.addedAt)).slice(0,2)
  function surpriseMe(){const pool=books.filter(b=>b.status==='pending'); const source=pool.length?pool:books; if(source.length)setSurprise(source[Math.floor(Math.random()*source.length)])}
