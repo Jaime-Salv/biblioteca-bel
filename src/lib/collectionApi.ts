@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import { getLibraryBooks } from './libraryApi'
+import { getLibraryBooks, inferGenres, type ExternalBook } from './libraryApi'
 import type { AppBook } from './models'
 
 export type LibraryHealth = {
@@ -152,6 +152,76 @@ export async function addEditionToWishlist(libraryId: string, editionId: string,
   const { data, error } = await supabase.from('wishlist_items').insert({ library_id: libraryId, edition_id: editionId, priority, price_seen: priceSeen ?? null, notes: notes?.trim() || null }).select('id').single()
   if (error) throw error
   return data
+}
+
+export async function addExternalBookToWishlist(libraryId: string, book: ExternalBook, priority = 2) {
+  let editionId: string | null = null
+  if (book.isbn13) {
+    const { data, error } = await supabase.from('editions').select('id').eq('library_id', libraryId).eq('isbn_13', book.isbn13).maybeSingle()
+    if (error) throw error
+    editionId = data?.id ?? null
+  }
+  if (!editionId && book.isbn10) {
+    const { data, error } = await supabase.from('editions').select('id').eq('library_id', libraryId).eq('isbn_10', book.isbn10).maybeSingle()
+    if (error) throw error
+    editionId = data?.id ?? null
+  }
+
+  if (!editionId) {
+    const { data: existingWork, error: workLookupError } = await supabase.from('works').select('id').eq('library_id', libraryId).ilike('canonical_title', book.title).limit(1).maybeSingle()
+    if (workLookupError) throw workLookupError
+    let workId = existingWork?.id as string | undefined
+    const inferredGenres = inferGenres(book.categories)
+    if (!workId) {
+      const { data: work, error } = await supabase.from('works').insert({
+        library_id: libraryId,
+        canonical_title: book.title,
+        subtitle: book.subtitle ?? null,
+        description: book.description ?? null,
+        primary_genre: inferredGenres[0] ?? null,
+        genres: inferredGenres,
+      }).select('id').single()
+      if (error) throw error
+      workId = work.id
+    }
+
+    for (let index = 0; index < book.authors.length; index += 1) {
+      const authorName = book.authors[index].trim()
+      if (!authorName) continue
+      const { data: existingAuthor, error: authorLookupError } = await supabase.from('authors').select('id').eq('library_id', libraryId).ilike('name', authorName).limit(1).maybeSingle()
+      if (authorLookupError) throw authorLookupError
+      let authorId = existingAuthor?.id as string | undefined
+      if (!authorId) {
+        const { data: author, error } = await supabase.from('authors').insert({ library_id: libraryId, name: authorName }).select('id').single()
+        if (error) throw error
+        authorId = author.id
+      }
+      const { error: linkError } = await supabase.from('work_authors').upsert({ work_id: workId, author_id: authorId, role: 'author', position: index }, { onConflict: 'work_id,author_id,role' })
+      if (linkError) throw linkError
+    }
+
+    const normalizedDate = book.publishedDate && /^\d{4}-\d{2}-\d{2}$/.test(book.publishedDate) ? book.publishedDate : null
+    const { data: edition, error: editionError } = await supabase.from('editions').insert({
+      library_id: libraryId,
+      work_id: workId,
+      isbn_10: book.isbn10 ?? null,
+      isbn_13: book.isbn13 ?? null,
+      publisher: book.publisher ?? null,
+      publication_date: normalizedDate,
+      publication_year: book.publicationYear ?? null,
+      language: book.language ?? null,
+      page_count: book.pageCount ?? null,
+      cover_url: book.coverUrl ?? null,
+      description: book.description ?? null,
+      external_source: book.source ?? 'manual',
+      external_source_id: book.sourceId || null,
+      metadata_json: book.raw as any,
+    }).select('id').single()
+    if (editionError) throw editionError
+    editionId = edition.id
+  }
+
+  return addEditionToWishlist(libraryId, editionId, priority)
 }
 
 export async function removeWishlistItem(libraryId: string, id: string) {
