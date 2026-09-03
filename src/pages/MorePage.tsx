@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { DatabaseBackup, Download, FileSpreadsheet, LogOut, Save, Settings, UserRound, Users } from 'lucide-react'
+import { DatabaseBackup, Download, FileSpreadsheet, LibraryBig, LogOut, Save, Settings, UserRound, Users } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useLibrary } from '../context/LibraryContext'
@@ -77,6 +77,7 @@ export function MorePage() {
   return <div className="page"><p className="eyebrow">AJUSTES</p><h1>Más</h1><p className="subtitle">Gestiona tu cuenta y tu colección.</p>
     <Link to="/profile" className="account-card profile-account-link"><ProfileAvatar userId={user?.id} fallback={user?.email}/><div><strong>Mi perfil</strong><span>{user?.email}</span></div><UserRound size={19}/></Link>
     <div className="settings-list">
+      <Link to="/collection"><LibraryBig size={20}/><span>Colección, préstamos y deseos</span><span>›</span></Link>
       <button onClick={()=>setPanel(panel==='members'?null:'members')}><Users size={20}/><span>Cuenta y acceso</span><span>›</span></button>
       <button onClick={()=>void exportCsv()} disabled={!!busy}><FileSpreadsheet size={20}/><span>{busy==='csv'?'Preparando CSV…':'Exportar colección a CSV'}</span><Download size={16}/></button>
       <button onClick={()=>void backup()} disabled={!!busy}><DatabaseBackup size={20}/><span>{busy==='backup'?'Reuniendo datos y archivos…':'Copia de seguridad completa (.zip)'}</span><Download size={16}/></button>
