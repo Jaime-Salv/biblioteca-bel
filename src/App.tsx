@@ -6,6 +6,7 @@ import { StatsPage } from './pages/StatsPage'
 import { MorePage } from './pages/MorePage'
 import { ProfilePage } from './pages/ProfilePage'
 import { BookDetailPage } from './pages/BookDetailPage'
+import { CollectionPage } from './pages/CollectionPage'
 import { BottomNav } from './components/BottomNav'
 import { useAuth } from './context/AuthContext'
 import { useLibrary } from './context/LibraryContext'
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/library" replace />} />
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/books/:id" element={<BookDetailPage />} />
+          <Route path="/collection" element={<CollectionPage />} />
           <Route path="/shelves" element={<ShelvesPage />} />
           <Route path="/scan" element={<ScannerPage />} />
           <Route path="/stats" element={<StatsPage />} />
