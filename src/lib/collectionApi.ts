@@ -146,7 +146,8 @@ export async function getWishlist(libraryId: string): Promise<WishlistItem[]> {
   })
 }
 
-export async function addEditionToWishlist(libraryId: string, editionId: string, priority = 2, priceSeen?: number | null, notes?: string | null) {
+export async function addEditionToWishlist(libraryId: string, editionId: string | null, priority = 2, priceSeen?: number | null, notes?: string | null) {
+  if (!editionId) throw new Error('No se pudo determinar la edición del libro para añadirla a deseos.')
   const { data: existing } = await supabase.from('wishlist_items').select('id').eq('library_id', libraryId).eq('edition_id', editionId).is('purchased_at', null).maybeSingle()
   if (existing) return existing
   const { data, error } = await supabase.from('wishlist_items').insert({ library_id: libraryId, edition_id: editionId, priority, price_seen: priceSeen ?? null, notes: notes?.trim() || null }).select('id').single()
