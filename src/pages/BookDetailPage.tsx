@@ -16,7 +16,8 @@ import {
   type BookCollectorDetails,
   type CollectorAttributeState,
 } from '../lib/libraryApi'
-import { getCustomCoverUrl, uploadBookCoverPhoto } from '../lib/coverPhotoApi'
+import { addReadingEvent, createLoan, getLoans, returnLoan, type LoanItem } from '../lib/collectionApi'
+import { deleteBookPhoto, getBookPhotos, getCustomCoverUrl, uploadBookCoverPhoto, uploadBookPhoto, type BookPhoto, type BookPhotoType } from '../lib/coverPhotoApi'
 import type { AppBook, LibraryLocation, ReadingStatus } from '../lib/models'
 
 const readingOptions: { value: ReadingStatus; label: string }[] = [
@@ -25,15 +26,15 @@ const readingOptions: { value: ReadingStatus; label: string }[] = [
 const conditionOptions = [
   { value: '', label: '✨ Sin indicar' }, { value: 'new', label: '🆕 Nuevo' }, { value: 'excellent', label: '🌟 Excelente' }, { value: 'very_good', label: '💫 Muy bueno' }, { value: 'good', label: '👍 Bueno' }, { value: 'acceptable', label: '🙂 Aceptable' }, { value: 'damaged', label: '🩹 Dañado' },
 ]
+const photoTypes: Array<{value:BookPhotoType;label:string}> = [
+  {value:'signature',label:'✍️ Firma'}, {value:'dedication',label:'💌 Dedicatoria'}, {value:'numbering',label:'🔢 Numeración'}, {value:'back_cover',label:'📘 Contraportada'}, {value:'condition',label:'🩹 Estado'}, {value:'detail',label:'🔍 Detalle'}, {value:'other',label:'📷 Otra'},
+]
 
 type EditState = { title:string; subtitle:string; authors:string; isbn:string; publisher:string; year:string; pages:string; synopsis:string; coverUrl:string; status:ReadingStatus; condition:string; locationId:string; primaryGenre:string; genres:string[] }
 type PurchaseState = { price:string; seller:string; date:string; orderNumber:string }
 function stateFromBook(book:AppBook):EditState { return { title:book.title, subtitle:book.subtitle??'', authors:book.author==='Autor desconocido'?'':book.author, isbn:book.isbn??'', publisher:book.publisher??'', year:book.year!=null?String(book.year):'', pages:book.pages!=null?String(book.pages):'', synopsis:book.synopsis??'', coverUrl:book.coverUrl??'', status:book.status, condition:book.condition??'', locationId:book.locationId??'', primaryGenre:book.primaryGenre??'', genres:book.genres??[] } }
 function purchaseState(details:BookCollectorDetails|null):PurchaseState { return { price:details?.purchase.price!=null?String(details.purchase.price):'', seller:details?.purchase.seller??'', date:details?.purchase.date??'', orderNumber:details?.purchase.orderNumber??'' } }
-
-const detailLabels:Record<string,string> = {
-  'Firmado':'¿Por quién está firmado?', 'Numerado':'Ej. 184/500', 'Dedicado':'¿A quién / qué dedicatoria?', 'Primera impresión':'Detalles de impresión', 'Primera edición':'Detalles de edición',
-}
+const detailLabels:Record<string,string> = { 'Firmado':'¿Por quién está firmado?', 'Numerado':'Ej. 184/500', 'Dedicado':'¿A quién / qué dedicatoria?', 'Primera impresión':'Detalles de impresión', 'Primera edición':'Detalles de edición' }
 
 export function BookDetailPage(){
   const {id}=useParams(); const{activeLibrary}=useLibrary()
@@ -42,22 +43,29 @@ export function BookDetailPage(){
   const[form,setForm]=useState<EditState|null>(null); const[purchase,setPurchase]=useState<PurchaseState>({price:'',seller:'',date:'',orderNumber:''}); const[attributes,setAttributes]=useState<CollectorAttributeState[]>([])
   const[ticket,setTicket]=useState<File|null>(null); const[valuation,setValuation]=useState(''); const[valuationNote,setValuationNote]=useState(''); const[estimating,setEstimating]=useState(false); const[estimateMessage,setEstimateMessage]=useState<string|null>(null)
   const[customCoverUrl,setCustomCoverUrl]=useState<string|null>(null); const[coverUploading,setCoverUploading]=useState(false); const[coverMessage,setCoverMessage]=useState<string|null>(null)
+  const[photos,setPhotos]=useState<BookPhoto[]>([]); const[photoType,setPhotoType]=useState<BookPhotoType>('signature'); const[photoUploading,setPhotoUploading]=useState(false)
+  const[loans,setLoans]=useState<LoanItem[]>([]); const[borrower,setBorrower]=useState(''); const[loanReturnDate,setLoanReturnDate]=useState(''); const[loanNotes,setLoanNotes]=useState('')
+  const[rating,setRating]=useState(0); const[readingNote,setReadingNote]=useState(''); const[actionMessage,setActionMessage]=useState<string|null>(null)
 
-  async function load(){ if(!activeLibrary||!id)return; setLoading(true); try{ const[books,locs,details,customCover]=await Promise.all([getLibraryBooks(activeLibrary.id),getLocations(activeLibrary.id),getBookCollectorDetails(activeLibrary.id,id),getCustomCoverUrl(id).catch(()=>null)]); const found=books.find(b=>b.id===id)??null; setBook(found); setLocations(locs); setCollector(details); setPurchase(purchaseState(details)); setAttributes(details.attributes); setCustomCoverUrl(customCover); if(found)setForm(stateFromBook(found)) }catch(err){setError(err instanceof Error?err.message:'No se pudo cargar la ficha.')}finally{setLoading(false)} }
+  async function load(){
+    if(!activeLibrary||!id)return
+    setLoading(true)
+    try{
+      const[books,locs,details,customCover,photoList,loanList]=await Promise.all([
+        getLibraryBooks(activeLibrary.id),getLocations(activeLibrary.id),getBookCollectorDetails(activeLibrary.id,id),getCustomCoverUrl(id).catch(()=>null),getBookPhotos(id).catch(()=>[]),getLoans(activeLibrary.id).catch(()=>[]),
+      ])
+      const found=books.find(b=>b.id===id)??null
+      setBook(found); setLocations(locs); setCollector(details); setPurchase(purchaseState(details)); setAttributes(details.attributes); setCustomCoverUrl(customCover); setPhotos(photoList); setLoans(loanList.filter(l=>l.bookCopyId===id)); if(found)setForm(stateFromBook(found))
+    }catch(err){setError(err instanceof Error?err.message:'No se pudo cargar la ficha.')}finally{setLoading(false)}
+  }
   useEffect(()=>{void load()},[activeLibrary,id])
   const locationOptions=useMemo(()=>locations.map(l=>({id:l.id,label:l.name})),[locations])
   const isDirty=useMemo(()=>{ if(!book||!form)return false; const base=JSON.stringify(stateFromBook(book)); const pBase=JSON.stringify(purchaseState(collector)); const aBase=JSON.stringify(collector?.attributes??[]); return JSON.stringify(form)!==base||JSON.stringify(purchase)!==pBase||JSON.stringify(attributes)!==aBase||!!ticket },[book,form,purchase,attributes,collector,ticket])
+  const activeLoan=loans.find(l=>!l.returnedAt)??null
 
   function toggleAttribute(attrId:string){ setAttributes(prev=>prev.map(a=>a.id===attrId?{...a,selected:!a.selected}:a)) }
   function patchAttribute(attrId:string,patch:Partial<CollectorAttributeState>){ setAttributes(prev=>prev.map(a=>a.id===attrId?{...a,...patch}:a)) }
-
-  function toggleGenre(genre:string){
-    if(!form)return
-    const exists=form.genres.includes(genre)
-    const next=exists?form.genres.filter(g=>g!==genre):[...form.genres,genre]
-    const primary=exists&&form.primaryGenre===genre?(next[0]??''):(form.primaryGenre||genre)
-    setForm({...form,genres:next,primaryGenre:primary})
-  }
+  function toggleGenre(genre:string){ if(!form)return; const exists=form.genres.includes(genre); const next=exists?form.genres.filter(g=>g!==genre):[...form.genres,genre]; const primary=exists&&form.primaryGenre===genre?(next[0]??''):(form.primaryGenre||genre); setForm({...form,genres:next,primaryGenre:primary}) }
 
   async function save(e?:FormEvent){ e?.preventDefault(); if(!activeLibrary||!book||!form)return; setSaving(true);setError(null);setSaved(false); try{
     await updateBookDetails(activeLibrary.id,book.id,{title:form.title,subtitle:form.subtitle||null,authors:form.authors.split(/[,;\n]+/).map(x=>x.trim()).filter(Boolean),isbn:form.isbn||null,publisher:form.publisher||null,publicationYear:form.year?Number(form.year):null,pageCount:form.pages?Number(form.pages):null,description:form.synopsis||null,coverUrl:form.coverUrl||null,readingStatus:form.status,physicalCondition:form.condition||null,locationId:form.locationId||null,primaryGenre:form.primaryGenre||null,genres:form.genres})
@@ -68,9 +76,14 @@ export function BookDetailPage(){
     await load(); setTicket(null); setSaved(true); window.setTimeout(()=>setSaved(false),2500)
   }catch(err){setError(err instanceof Error?err.message:'No se pudo guardar la ficha.')}finally{setSaving(false)} }
 
-  async function handleCoverPhoto(file:File|null){ if(!file||!activeLibrary||!book)return; setCoverUploading(true);setCoverMessage(null);setError(null); try{const url=await uploadBookCoverPhoto(activeLibrary.id,book.id,file);setCustomCoverUrl(url);setCoverMessage('📸 Foto guardada como portada de este ejemplar.');window.setTimeout(()=>setCoverMessage(null),3000)}catch(err){setError(err instanceof Error?err.message:'No se pudo guardar la foto de portada.')}finally{setCoverUploading(false)} }
+  async function handleCoverPhoto(file:File|null){ if(!file||!activeLibrary||!book)return; setCoverUploading(true);setCoverMessage(null);setError(null); try{const url=await uploadBookCoverPhoto(activeLibrary.id,book.id,file);setCustomCoverUrl(url);setCoverMessage('📸 Foto guardada como portada de este ejemplar.');await load();window.setTimeout(()=>setCoverMessage(null),3000)}catch(err){setError(err instanceof Error?err.message:'No se pudo guardar la foto de portada.')}finally{setCoverUploading(false)} }
+  async function handleGalleryPhoto(file:File|null){ if(!file||!activeLibrary||!book)return; setPhotoUploading(true);setError(null);try{await uploadBookPhoto(activeLibrary.id,book.id,file,photoType);await load();setActionMessage('📷 Foto añadida a la galería.');window.setTimeout(()=>setActionMessage(null),2500)}catch(err){setError(err instanceof Error?err.message:'No se pudo guardar la fotografía.')}finally{setPhotoUploading(false)} }
+  async function removePhoto(photo:BookPhoto){ if(!window.confirm('¿Eliminar esta foto del ejemplar?'))return;try{await deleteBookPhoto(photo);await load()}catch(err){setError(err instanceof Error?err.message:'No se pudo eliminar la foto.')} }
+  async function lendBook(){ if(!activeLibrary||!book)return;try{await createLoan(activeLibrary.id,book.id,borrower,loanReturnDate||null,loanNotes||null);setBorrower('');setLoanReturnDate('');setLoanNotes('');await load();setActionMessage('🤝 Préstamo registrado.')}catch(err){setError(err instanceof Error?err.message:'No se pudo registrar el préstamo.')} }
+  async function markReturned(){ if(!activeLibrary||!activeLoan)return;try{await returnLoan(activeLibrary.id,activeLoan.id);await load();setActionMessage('✅ Libro marcado como devuelto.')}catch(err){setError(err instanceof Error?err.message:'No se pudo registrar la devolución.')} }
+  async function readingEvent(type:'started'|'finished'|'abandoned'|'restarted'){ if(!activeLibrary||!book)return;try{await addReadingEvent(activeLibrary.id,book.id,type,rating||null,readingNote||null);setReadingNote('');if(type==='started'&&form)setForm({...form,status:'reading'});if(type==='finished'&&form)setForm({...form,status:'read'});if(type==='abandoned'&&form)setForm({...form,status:'abandoned'});setActionMessage('📖 Evento de lectura guardado.')}catch(err){setError(err instanceof Error?err.message:'No se pudo registrar la lectura.')} }
   async function addManualValuation(){ if(!activeLibrary||!book||!valuation.trim())return; setError(null); try{await addBookValuation(activeLibrary.id,book.id,Number(valuation.replace(',','.')),'Valoración manual',valuationNote);setValuation('');setValuationNote('');await load()}catch(err){setError(err instanceof Error?err.message:'No se pudo guardar la valoración.')} }
-  async function estimateValue(){ if(!activeLibrary||!book||!form?.isbn)return; setEstimating(true);setEstimateMessage(null);setError(null); try{const result=await estimateBookValueByIsbn(form.isbn); if(result.found&&result.value!=null){await addBookValuation(activeLibrary.id,book.id,result.value,result.source??'Fuente externa',result.note??null);setEstimateMessage(`✨ Referencia encontrada: ${result.value.toFixed(2)} ${result.currency??'€'}.`);await load()}else setEstimateMessage('No hay un precio público fiable para esta edición. Puedes añadir una valoración manual.') }catch(err){setError(err instanceof Error?err.message:'No se pudo estimar el valor.')}finally{setEstimating(false)} }
+  async function estimateValue(){ if(!activeLibrary||!book||!form?.isbn)return; setEstimating(true);setEstimateMessage(null);setError(null); try{const result=await estimateBookValueByIsbn(form.isbn); if(result.found&&result.value!=null){await addBookValuation(activeLibrary.id,book.id,result.value,result.source??'Fuente externa',result.note??null);setEstimateMessage(`✨ Referencia encontrada: ${result.value.toFixed(2)} ${result.currency??'€'}.`);await load()}else setEstimateMessage('No hay un precio público fiable para esta edición. Puedes añadir una valoración manual.')}catch(err){setError(err instanceof Error?err.message:'No se pudo estimar el valor.')}finally{setEstimating(false)} }
 
   if(loading)return <div className="page"><div className="state-card">Cargando ficha…</div></div>
   if(!book||!form)return <div className="page"><Link to="/library" className="back-link"><ArrowLeft size={17}/> Biblioteca</Link><div className="empty-library"><div>📕</div><h2>No encontramos este ejemplar</h2></div></div>
@@ -79,11 +92,20 @@ export function BookDetailPage(){
   const displayedCover=customCoverUrl||form.coverUrl
   return <form className="page lively-book-page" onSubmit={save}>
     <div className="detail-topbar lively-topbar"><Link to="/library" className="back-link"><ArrowLeft size={17}/> Biblioteca</Link><div className="live-edit-note">✏️ Editable directamente</div></div>
-    {saved&&<div className="form-message success floating-success"><Check size={15}/> Cambios guardados</div>}{error&&<div className="form-message error">{error}</div>}
+    {saved&&<div className="form-message success floating-success"><Check size={15}/> Cambios guardados</div>}{error&&<div className="form-message error">{error}</div>}{actionMessage&&<div className="form-message success">{actionMessage}</div>}
 
     <section className="collector-hero"><div className="collector-cover-wrap"><div className="collector-cover">{displayedCover?<img src={displayedCover} alt={`Portada de ${form.title||'libro'}`}/>:<div className="cover-fallback"><span>📚</span><strong>{form.title||'Sin portada'}</strong></div>}</div><label className="ticket-upload cover-camera-action"><Camera size={17}/><span>{coverUploading?'Guardando foto…':'Hacer foto de portada'}</span><input type="file" accept="image/*" capture="environment" disabled={coverUploading} onChange={e=>{void handleCoverPhoto(e.target.files?.[0]??null);e.currentTarget.value=''}}/></label>{coverMessage&&<small className="valuation-note">{coverMessage}</small>}{customCoverUrl&&<small className="muted-mini">Tu foto propia tiene prioridad sobre la portada externa.</small>}<label className="cover-url-field">🖼️ Portada externa<input value={form.coverUrl} onChange={e=>setForm({...form,coverUrl:e.target.value})} placeholder="Pega una URL de portada"/></label></div>
       <div className="collector-main-info"><p className="eyebrow">📘 {book.internalCode}</p><input className="title-live-input" value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/><input className="subtitle-live-input" value={form.subtitle} onChange={e=>setForm({...form,subtitle:e.target.value})} placeholder="Añadir subtítulo…"/><label className="author-live-field">✍️<input value={form.authors} onChange={e=>setForm({...form,authors:e.target.value})} placeholder="Autor o autores"/></label>
       <div className="collector-chips"><label className="chip-select reading-chip"><span>📖</span><select value={form.status} onChange={e=>setForm({...form,status:e.target.value as ReadingStatus})}>{readingOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></label><label className="chip-select condition-chip"><span>🌟</span><select value={form.condition} onChange={e=>setForm({...form,condition:e.target.value})}>{conditionOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></label>{book.needsReview&&<span className="review-pill">🟡 Ficha por completar</span>}</div></div></section>
+
+    <section className="collector-section"><div className="collector-section-heading"><div className="section-emoji">📷</div><div><h2>Galería del ejemplar</h2><p>Firma, dedicatoria, numeración, daños y otros detalles que hacen única esta copia.</p></div></div>
+      <div className="ticket-panel"><select value={photoType} onChange={e=>setPhotoType(e.target.value as BookPhotoType)}>{photoTypes.map(p=><option key={p.value} value={p.value}>{p.label}</option>)}</select><label className="ticket-upload"><Camera size={17}/><span>{photoUploading?'Guardando…':'Hacer foto'}</span><input type="file" accept="image/*" capture="environment" disabled={photoUploading} onChange={e=>{void handleGalleryPhoto(e.target.files?.[0]??null);e.currentTarget.value=''}}/></label><label className="ticket-upload"><Upload size={17}/><span>Elegir imagen</span><input type="file" accept="image/*" disabled={photoUploading} onChange={e=>{void handleGalleryPhoto(e.target.files?.[0]??null);e.currentTarget.value=''}}/></label></div>
+      {photos.filter(p=>p.type!=='cover').length?<div className="book-photo-gallery">{photos.filter(p=>p.type!=='cover').map(photo=><figure key={photo.id}><img src={photo.url} alt={photo.type}/><figcaption><span>{photoTypes.find(p=>p.value===photo.type)?.label??'📷 Foto'}</span><button type="button" onClick={()=>void removePhoto(photo)}>Eliminar</button></figcaption></figure>)}</div>:<p className="muted-mini">Aún no hay fotos adicionales de este ejemplar.</p>}
+    </section>
+
+    <section className="collector-section"><div className="collector-section-heading"><div className="section-emoji">🤝</div><div><h2>Préstamo</h2><p>Recuerda a quién se lo dejaste y cuándo vuelve.</p></div></div>{activeLoan?<div className="inline-panel"><strong>Prestado a {activeLoan.borrowerName}</strong><p>Desde {activeLoan.loanDate}{activeLoan.expectedReturnDate?` · previsto ${activeLoan.expectedReturnDate}`:''}</p>{activeLoan.notes&&<small>{activeLoan.notes}</small>}<button type="button" className="primary-button" onClick={()=>void markReturned()}>Marcar como devuelto</button></div>:<div className="purchase-grid"><label><span>👤 Persona</span><input value={borrower} onChange={e=>setBorrower(e.target.value)} placeholder="Nombre"/></label><label><span>📅 Devolución prevista</span><input type="date" value={loanReturnDate} onChange={e=>setLoanReturnDate(e.target.value)}/></label><label><span>📝 Nota</span><input value={loanNotes} onChange={e=>setLoanNotes(e.target.value)} placeholder="Opcional"/></label><button type="button" className="primary-button" onClick={()=>void lendBook()} disabled={!borrower.trim()}>Registrar préstamo</button></div>}</section>
+
+    <section className="collector-section"><div className="collector-section-heading"><div className="section-emoji">📖</div><div><h2>Diario de lectura</h2><p>Inicio, fin, abandono, relectura y tu valoración personal.</p></div></div><div className="valuation-actions"><div className="manual-valuation"><select value={rating} onChange={e=>setRating(Number(e.target.value))}><option value={0}>Sin estrellas</option>{[1,2,3,4,5].map(n=><option key={n} value={n}>{'★'.repeat(n)}{'☆'.repeat(5-n)}</option>)}</select><input value={readingNote} onChange={e=>setReadingNote(e.target.value)} placeholder="Nota de lectura (opcional)"/></div><div className="filter-strip"><button type="button" onClick={()=>void readingEvent('started')}>Empecé</button><button type="button" onClick={()=>void readingEvent('finished')}>Terminé</button><button type="button" onClick={()=>void readingEvent('restarted')}>Relectura</button><button type="button" onClick={()=>void readingEvent('abandoned')}>Abandoné</button></div></div></section>
 
     <section className="collector-section"><div className="collector-section-heading"><div className="section-emoji">🏠</div><div><h2>Mi ejemplar</h2><p>Tu copia física, no solo el libro.</p></div></div><div className="collector-cards-grid"><label className="collector-field-card"><span>📍 Ubicación</span><select value={form.locationId} onChange={e=>setForm({...form,locationId:e.target.value})}><option value="">Sin ubicación</option>{locationOptions.map(l=><option key={l.id} value={l.id}>{l.label}</option>)}</select></label><div className="collector-stat-card"><span>💸 Precio pagado</span><strong>{purchase.price?`${purchase.price} €`:'Sin registrar'}</strong><small>Se edita justo debajo.</small></div><div className="collector-stat-card"><span>💎 Valor orientativo</span><strong>{latestValue!=null?`${latestValue.toFixed(2)} €`:'Sin valorar'}</strong><small>{collector?.valuations[0]?.source??'Añade o busca una referencia.'}</small></div></div></section>
 
