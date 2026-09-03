@@ -65,5 +65,6 @@ export async function addExternalBookToWishlist(libraryId: string, book: Externa
     editionId = edition.id
   }
 
+  if (!editionId) throw new Error('No se pudo crear o recuperar la edición para la wishlist.')
   return addEditionToWishlist(libraryId, editionId, priority)
 }
